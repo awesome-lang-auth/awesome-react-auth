@@ -116,6 +116,8 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
   private userEpoch = 0;
   /** Bumped by logout and account deletion; a refresh that spans one is dropped. */
   private sessionGeneration = 0;
+  /** While set, no refresh starts and no session check runs: the logout owns the session. */
+  private loggingOut = false;
 
   constructor(options: AuthClientOptions = {}) {
     this.apiPrefix = normalizePrefix(options.apiPrefix ?? '/auth');
@@ -304,6 +306,7 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
     // TOKEN_MISMATCH, ...) is an answer about the input: refreshing cannot fix
     // it, and retrying would resend a code or a password.
     if (typeof body?.code === 'string' && !TOKEN_ERROR_CODES.has(body.code)) return response;
+    if (this.loggingOut) return response;
 
     const outcome = await this.refreshSession();
     if (outcome === 'ok') return this.attempt(input, init, backend);
@@ -413,6 +416,7 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
    * Resolves to the user, or `null` when there is no session.
    */
   checkSession(): Promise<TUser | null> {
+    if (this.loggingOut) return Promise.resolve(null);
     return this.sessionCheck ?? this.startCheck();
   }
 
@@ -455,6 +459,7 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
 
   /** Refreshes the tokens now. Concurrent calls share one request. */
   async refresh(): Promise<AuthResult> {
+    if (this.loggingOut) return { success: false, error: 'Logout in progress' };
     const outcome = await this.refreshSession();
     if (outcome === 'ok') return { success: true };
     await this.expire(outcome === 'revoked' ? 'revoked' : 'refresh-failed');
@@ -470,18 +475,23 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
   async logout(): Promise<AuthResult> {
     this.checkGeneration++; // a check still in flight must not resurrect the user
     this.sessionCheck = null;
-    // Let a refresh in flight land first, so its Set-Cookie cannot arrive after
-    // the logout cleared the cookies; then make sure its answer is dropped.
-    if (this.refreshing) await this.refreshing.catch(() => undefined);
-    this.sessionGeneration++;
-    // Bearer: hand the refresh token over so the backend can revoke it (go
-    // reads it from the body; node only revokes from the access-token cookie).
-    const tokens = this.mode === 'bearer' ? await this.loadTokens() : null;
-    const r = await this.api('POST', '/logout', tokens?.refreshToken ? { refreshToken: tokens.refreshToken } : {});
-    await this.clearTokens();
-    this.setState({ user: null, isLoading: false, error: null });
-    this.emit('logout', undefined);
-    return this.done(r, 'Logout failed');
+    this.loggingOut = true;
+    try {
+      // Let a refresh in flight land first, so its Set-Cookie cannot arrive after
+      // the logout cleared the cookies; then make sure its answer is dropped.
+      if (this.refreshing) await this.refreshing.catch(() => undefined);
+      this.sessionGeneration++;
+      // Bearer: hand the refresh token over so the backend can revoke it (go
+      // reads it from the body; node only revokes from the access-token cookie).
+      const tokens = this.mode === 'bearer' ? await this.loadTokens() : null;
+      const r = await this.api('POST', '/logout', tokens?.refreshToken ? { refreshToken: tokens.refreshToken } : {});
+      await this.clearTokens();
+      this.setState({ user: null, isLoading: false, error: null });
+      this.emit('logout', undefined);
+      return this.done(r, 'Logout failed');
+    } finally {
+      this.loggingOut = false;
+    }
   }
 
   async getActiveSessions(): Promise<SessionsResult> {

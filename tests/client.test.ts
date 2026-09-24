@@ -474,6 +474,30 @@ describe('review fixes', () => {
     expect(be.callsTo('POST /auth/logout')[0]?.body).toEqual({ refreshToken: 'rt_new' });
   });
 
+  it('a 401 during logout starts no refresh and no check can resurrect the user', async () => {
+    const storage = new MemoryTokenStorage();
+    storage.save({ accessToken: 'at_1', refreshToken: 'rt_1' });
+    let releaseLogout!: () => void;
+    const be = createFakeBackend()
+      .on('GET /auth/me', { body: ALICE })
+      .on('GET /auth/sessions', UNAUTHORIZED)
+      .on('POST /auth/refresh', { body: { success: true, accessToken: 'at_2', refreshToken: 'rt_2' } })
+      .on('POST /auth/logout', () => new Promise((resolve) => (releaseLogout = () => resolve({ body: { success: true } }))));
+    const client = new AwesomeAuthClient({ fetch: be.fetch, mode: 'bearer', storage });
+    await client.checkSession();
+
+    const loggingOut = client.logout();
+    await vi.waitFor(() => expect(be.callsTo('POST /auth/logout')).toHaveLength(1));
+    const midway = [client.getActiveSessions(), client.checkSession(), client.refresh()];
+    releaseLogout();
+    await Promise.all([loggingOut, ...midway]);
+
+    expect(be.callsTo('POST /auth/refresh')).toHaveLength(0);
+    expect(be.callsTo('GET /auth/me')).toHaveLength(1);
+    expect(storage.load()).toBeNull();
+    expect(client.getUser()).toBeNull();
+  });
+
   it('bearer logout hands the refresh token to the backend', async () => {
     const storage = new MemoryTokenStorage();
     storage.save({ accessToken: 'at_1', refreshToken: 'rt_1' });
