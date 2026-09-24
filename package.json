@@ -1,0 +1,83 @@
+{
+  "name": "@awesome-lang-auth/react",
+  "version": "0.1.0",
+  "description": "React bindings for the awesome-*-auth family: a typed, backend-agnostic client for the awesome-node-auth wire protocol (cookie on web, bearer on React Native).",
+  "license": "MIT",
+  "author": "Nicola Brecciaroli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awesome-lang-auth/awesome-react-auth.git"
+  },
+  "homepage": "https://github.com/awesome-lang-auth/awesome-react-auth#readme",
+  "bugs": "https://github.com/awesome-lang-auth/awesome-react-auth/issues",
+  "keywords": [
+    "react",
+    "react-native",
+    "auth",
+    "authentication",
+    "awesome-node-auth",
+    "awesome-go-auth",
+    "hooks",
+    "nextjs"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint:package": "publint --strict && attw --pack . --profile node16",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.2",
+    "@testing-library/react": "^16.3.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "jsdom": "^26.1.0",
+    "publint": "^0.3.12",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
