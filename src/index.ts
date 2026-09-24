@@ -1,12 +1,11 @@
 export { AwesomeAuthClient } from './client';
-export { AwesomeAuthProvider, AwesomeAuthContext } from './AwesomeAuthProvider';
+export { AwesomeAuthProvider } from './AwesomeAuthProvider';
 export type { AwesomeAuthProviderProps, AwesomeAuthContextValue } from './AwesomeAuthProvider';
 export { useAwesomeAuth, useAuthUser, useAuthClient } from './hooks';
-export { ProtectedRoute, AnonymousOnly, hasRole } from './components';
+export { ProtectedRoute, AnonymousOnly } from './components';
 export type { ProtectedRouteProps, AnonymousOnlyProps } from './components';
+export { hasRole } from './roles';
 export { MemoryTokenStorage } from './storage';
-export { SERVER_SNAPSHOT, getServerSnapshot, isBrowser, isReactNative } from './ssr';
-export { detectDefaultMode, readCsrfToken } from './transport';
 export type {
   AuthUser,
   AuthState,

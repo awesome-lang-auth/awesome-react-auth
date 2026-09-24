@@ -1,4 +1,4 @@
-import { createContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AwesomeAuthClient } from './client';
 import { getServerSnapshot } from './ssr';
 import type { AuthClientOptions, AuthResult, AuthState, AuthUser, LoginResult } from './types';
@@ -17,7 +17,11 @@ AwesomeAuthContext.displayName = 'AwesomeAuthContext';
 
 interface ProviderBaseProps {
   children?: ReactNode;
-  /** Run `checkSession()` on mount. Default `true`. */
+  /**
+   * Run `checkSession()` on mount. Default `true`. With `false`, the state
+   * stays `isLoading` (and the gates on their fallback) until you call
+   * `client.checkSession()` yourself.
+   */
   initializeOnStartup?: boolean;
 }
 
@@ -46,8 +50,16 @@ export type AwesomeAuthProviderProps =
  */
 export function AwesomeAuthProvider(props: AwesomeAuthProviderProps) {
   const { children, initializeOnStartup = true } = props;
-  const [ownClient] = useState(() => (props.client ? null : new AwesomeAuthClient(props.options)));
-  const client = (props.client ?? ownClient) as AwesomeAuthClient;
+  // Created on first need and kept, even if the parent later switches between
+  // `client` and `options`.
+  const ownClient = useRef<AwesomeAuthClient | null>(null);
+  let client: AwesomeAuthClient;
+  if (props.client) {
+    client = props.client;
+  } else {
+    ownClient.current ??= new AwesomeAuthClient(props.options);
+    client = ownClient.current;
+  }
 
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot, getServerSnapshot);
 
@@ -57,17 +69,18 @@ export function AwesomeAuthProvider(props: AwesomeAuthProviderProps) {
     if (initializeOnStartup && !client.isInitialized()) void client.checkSession();
   }, [client, initializeOnStartup]);
 
-  const value = useMemo<AwesomeAuthContextValue>(
+  // Stable across state changes: `useEffect(..., [logout])` does not re-run on login.
+  const actions = useMemo(
     () => ({
-      ...state,
-      login: (email, password) => client.login(email, password),
+      login: (email: string, password: string) => client.login(email, password),
       logout: () => client.logout(),
       refresh: () => client.refresh(),
       checkSession: () => client.checkSession(),
-      client,
     }),
-    [state, client],
+    [client],
   );
+
+  const value = useMemo<AwesomeAuthContextValue>(() => ({ ...state, ...actions, client }), [state, actions, client]);
 
   return <AwesomeAuthContext.Provider value={value}>{children}</AwesomeAuthContext.Provider>;
 }

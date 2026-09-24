@@ -30,9 +30,13 @@ describe('server render', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('imports the package entry without touching browser globals', async () => {
-    const mod = await import('../src/index');
-    expect(mod.SERVER_SNAPSHOT.isLoading).toBe(true);
-    expect(new mod.AwesomeAuthClient().mode).toBe('cookie');
+});
+
+describe('server entry', () => {
+  it('exposes hasRole and SERVER_SNAPSHOT without the client boundary', async () => {
+    const server = await import('../src/server');
+    expect(server.hasRole({ sub: 'u', email: 'e', roles: ['admin'] }, 'admin')).toBe(true);
+    expect(server.hasRole(null, 'admin')).toBe(false);
+    expect(server.SERVER_SNAPSHOT).toEqual({ user: null, isAuthenticated: false, isLoading: true, error: null });
   });
 });

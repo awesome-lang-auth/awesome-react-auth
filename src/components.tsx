@@ -1,13 +1,26 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useAwesomeAuth } from './hooks';
+import { hasRole } from './roles';
 import { isBrowser } from './ssr';
-import type { AuthUser } from './types';
 
-/** `true` when `user` holds `role`, as its primary role or among its RBAC roles. */
-export function hasRole(user: AuthUser | null, role: string | readonly string[]): boolean {
-  if (!user) return false;
-  const wanted = typeof role === 'string' ? [role] : role;
-  return wanted.some((r) => user.role === r || (Array.isArray(user.roles) && user.roles.includes(r)));
+/**
+ * Runs `action` once each time `condition` becomes true: not again on a
+ * StrictMode effect replay, nor when the caller passes a new inline callback.
+ * The latest callback is the one called.
+ */
+function useOnceWhen(condition: boolean, action: () => void): void {
+  const latest = useRef(action);
+  latest.current = action;
+  const fired = useRef(false);
+  useEffect(() => {
+    if (!condition) {
+      fired.current = false;
+      return;
+    }
+    if (fired.current) return;
+    fired.current = true;
+    latest.current();
+  }, [condition]);
 }
 
 function navigate(to: string): void {
@@ -50,13 +63,10 @@ export function ProtectedRoute({
   const { isAuthenticated, isLoading, user } = useAwesomeAuth();
   const signedOut = !isLoading && !isAuthenticated;
 
-  useEffect(() => {
-    if (!signedOut) return;
+  useOnceWhen(signedOut, () => {
     if (onUnauthenticated) onUnauthenticated();
     else if (redirectTo) navigate(redirectTo);
-    // Callers pass inline callbacks: react to the state flip, not to identity.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signedOut, redirectTo]);
+  });
 
   if (isLoading || !isAuthenticated) return <>{fallback}</>;
   if (role !== undefined && !hasRole(user, role)) return <>{forbidden ?? fallback}</>;
@@ -78,12 +88,10 @@ export function AnonymousOnly({ children, fallback = null, redirectTo, onAuthent
   const { isAuthenticated, isLoading } = useAwesomeAuth();
   const signedIn = !isLoading && isAuthenticated;
 
-  useEffect(() => {
-    if (!signedIn) return;
+  useOnceWhen(signedIn, () => {
     if (onAuthenticated) onAuthenticated();
     else if (redirectTo) navigate(redirectTo);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signedIn, redirectTo]);
+  });
 
   if (isLoading || isAuthenticated) return <>{fallback}</>;
   return <>{children}</>;

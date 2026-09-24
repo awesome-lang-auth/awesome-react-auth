@@ -1,4 +1,6 @@
-import { StrictMode, useRef } from 'react';
+import { StrictMode } from 'react';
+import { hydrateRoot } from 'react-dom/client';
+import { renderToString } from 'react-dom/server';
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AwesomeAuthClient } from '../src/client';
@@ -175,29 +177,75 @@ describe('hooks', () => {
     expect(await screen.findByText('t_1')).toBeTruthy();
   });
 
-  it('keeps action identities stable across renders with the same state', async () => {
-    const be = createFakeBackend().on('GET /auth/me', { body: ALICE });
+  it('keeps action identities stable across state changes', async () => {
+    const be = signedOutBackend().on('POST /auth/login', { body: { success: true } });
     const client = new AwesomeAuthClient({ fetch: be.fetch });
-    await client.checkSession();
-    const seen: unknown[] = [];
-    function Probe({ tick }: { tick: number }) {
-      const ctx = useAwesomeAuth();
-      const ref = useRef(ctx);
-      seen.push(ref.current === ctx);
-      return <p>{tick}</p>;
+    const seen: Array<{ login: unknown; logout: unknown; loading: boolean }> = [];
+    function Probe() {
+      const { login, logout, isLoading } = useAwesomeAuth();
+      seen.push({ login, logout, loading: isLoading });
+      return null;
     }
-    const { rerender } = render(
+    render(
       <AwesomeAuthProvider client={client}>
-        <Probe tick={1} />
+        <Probe />
       </AwesomeAuthProvider>,
     );
+    await waitFor(() => expect(client.isInitialized()).toBe(true));
+    be.set('GET /auth/me', { body: ALICE });
+    await act(() => client.login('alice@example.com', 'pw'));
+
+    expect(seen.length).toBeGreaterThanOrEqual(3); // loading, signed out, signed in
+    expect(new Set(seen.map((s) => s.login)).size).toBe(1);
+    expect(new Set(seen.map((s) => s.logout)).size).toBe(1);
+  });
+
+  it('survives a switch from client to options', async () => {
+    const be = createFakeBackend().on('GET /auth/me', { body: ALICE });
+    const client = new AwesomeAuthClient({ fetch: be.fetch });
+    const props = (c: AwesomeAuthClient | null) => (c ? { client: c } : { options: { fetch: be.fetch } });
+    const { rerender } = render(
+      <AwesomeAuthProvider {...props(client)}>
+        <Status />
+      </AwesomeAuthProvider>,
+    );
+    await screen.findByText('hello alice@example.com');
+
     rerender(
-      <AwesomeAuthProvider client={client}>
-        <Probe tick={2} />
+      <AwesomeAuthProvider {...props(null)}>
+        <Status />
       </AwesomeAuthProvider>,
     );
 
-    expect(seen).toEqual([true, true]);
+    expect(await screen.findByText('hello alice@example.com')).toBeTruthy();
+  });
+
+  it('hydrates server HTML without a mismatch, then settles', async () => {
+    const be = createFakeBackend().on('GET /auth/me', { body: ALICE });
+    const client = new AwesomeAuthClient({ fetch: be.fetch });
+    await client.checkSession(); // already settled on the client: must still hydrate as loading
+    const tree = (c: AwesomeAuthClient) => (
+      <AwesomeAuthProvider client={c}>
+        <Status />
+      </AwesomeAuthProvider>
+    );
+    const container = document.createElement('div');
+    container.innerHTML = renderToString(tree(new AwesomeAuthClient({ fetch: be.fetch })));
+    expect(container.textContent).toBe('loading');
+    document.body.appendChild(container);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const recoverable = vi.fn();
+
+    let root!: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, tree(client), { onRecoverableError: recoverable });
+    });
+
+    expect(container.textContent).toBe('hello alice@example.com');
+    expect(recoverable).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+    act(() => root.unmount());
+    container.remove();
   });
 });
 
@@ -304,5 +352,36 @@ describe('AnonymousOnly', () => {
 
     await waitFor(() => expect(onAuthenticated).toHaveBeenCalledTimes(1));
     expect(screen.queryByText('login form')).toBeNull();
+  });
+});
+
+describe('gates under StrictMode', () => {
+  it('call onUnauthenticated / onAuthenticated exactly once', async () => {
+    const out = new AwesomeAuthClient({ fetch: signedOutBackend().fetch });
+    const inBe = createFakeBackend().on('GET /auth/me', { body: ALICE });
+    const inn = new AwesomeAuthClient({ fetch: inBe.fetch });
+    const onUnauthenticated = vi.fn();
+    const onAuthenticated = vi.fn();
+
+    render(
+      <StrictMode>
+        <AwesomeAuthProvider client={out}>
+          <ProtectedRoute onUnauthenticated={() => onUnauthenticated()}>
+            <p>secret</p>
+          </ProtectedRoute>
+        </AwesomeAuthProvider>
+        <AwesomeAuthProvider client={inn}>
+          <AnonymousOnly onAuthenticated={() => onAuthenticated()}>
+            <p>form</p>
+          </AnonymousOnly>
+        </AwesomeAuthProvider>
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(onUnauthenticated).toHaveBeenCalled());
+    await waitFor(() => expect(onAuthenticated).toHaveBeenCalled());
+    await act(async () => {});
+    expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+    expect(onAuthenticated).toHaveBeenCalledTimes(1);
   });
 });
