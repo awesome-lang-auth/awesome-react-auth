@@ -39,6 +39,9 @@ interface ApiResponse {
   networkError?: string;
 }
 
+/** The code node and go put on a 401 that a refresh can cure (resource-server verification). */
+const TOKEN_ERROR_CODES = new Set(['INVALID_TOKEN']);
+
 const INITIAL_STATE: AuthState = {
   user: null,
   isAuthenticated: false,
@@ -111,6 +114,8 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
    * a slow request from before a login must not log the new session out.
    */
   private userEpoch = 0;
+  /** Bumped by logout and account deletion; a refresh that spans one is dropped. */
+  private sessionGeneration = 0;
 
   constructor(options: AuthClientOptions = {}) {
     this.apiPrefix = normalizePrefix(options.apiPrefix ?? '/auth');
@@ -294,6 +299,11 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
       if (epoch === this.userEpoch) await this.expire('revoked');
       return response;
     }
+    // An expired access token comes back with no code (node answers a bare
+    // 403) or a token code. Any other code (CSRF_INVALID, INVALID_TEMP_TOKEN,
+    // TOKEN_MISMATCH, ...) is an answer about the input: refreshing cannot fix
+    // it, and retrying would resend a code or a password.
+    if (typeof body?.code === 'string' && !TOKEN_ERROR_CODES.has(body.code)) return response;
 
     const outcome = await this.refreshSession();
     if (outcome === 'ok') return this.attempt(input, init, backend);
@@ -319,6 +329,8 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
   }
 
   private async doRefresh(): Promise<RefreshOutcome> {
+    // A logout while the refresh is in flight wins: its answer is discarded.
+    const generation = this.sessionGeneration;
     let body: Record<string, string> = {};
     if (this.mode === 'bearer') {
       const tokens = await this.loadTokens();
@@ -336,6 +348,7 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
       return 'failed';
     }
     const data = (await readJson(response)) as { code?: string; success?: boolean } | null;
+    if (generation !== this.sessionGeneration) return 'failed';
     // A revoked refresh has no `success` field: check the code first.
     if (data?.code === 'SESSION_REVOKED') return 'revoked';
     if (!response.ok || data?.success === false) return 'failed';
@@ -424,8 +437,10 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
     if (r.ok && isUser(r.data)) {
       this.setState({ user: r.data as TUser, isLoading: false, error: null });
     } else if (r.status === 0) {
-      // Network failure: keep what we knew, surface the error.
-      this.setState({ isLoading: false, error: r.networkError ?? 'Network error' });
+      // Network failure proves nothing about the session: keep what we knew
+      // (and stay loading if we knew nothing, so the gates do not bounce a
+      // valid session to the login page). Call checkSession() again to retry.
+      this.setState({ error: r.networkError ?? 'Network error' });
     } else if (r.status === 401 || r.status === 403) {
       this.setState({ user: null, isLoading: false, error: null });
     } else {
@@ -455,7 +470,14 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
   async logout(): Promise<AuthResult> {
     this.checkGeneration++; // a check still in flight must not resurrect the user
     this.sessionCheck = null;
-    const r = await this.api('POST', '/logout', {});
+    // Let a refresh in flight land first, so its Set-Cookie cannot arrive after
+    // the logout cleared the cookies; then make sure its answer is dropped.
+    if (this.refreshing) await this.refreshing.catch(() => undefined);
+    this.sessionGeneration++;
+    // Bearer: hand the refresh token over so the backend can revoke it (go
+    // reads it from the body; node only revokes from the access-token cookie).
+    const tokens = this.mode === 'bearer' ? await this.loadTokens() : null;
+    const r = await this.api('POST', '/logout', tokens?.refreshToken ? { refreshToken: tokens.refreshToken } : {});
     await this.clearTokens();
     this.setState({ user: null, isLoading: false, error: null });
     this.emit('logout', undefined);
@@ -652,6 +674,7 @@ export class AwesomeAuthClient<TUser extends AuthUser = AuthUser> {
     const result = this.done(await this.api('DELETE', '/account'), 'Failed to delete account');
     if (result.success) {
       this.checkGeneration++;
+      this.sessionGeneration++;
       await this.clearTokens();
       this.setState({ user: null, isLoading: false, error: null });
     }

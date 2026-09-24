@@ -81,7 +81,8 @@ export function pathOf(url: string): string {
  * Auth endpoints whose 401/403 is an answer, not an expired session: never
  * refresh-and-retry them. `/me` is deliberately absent: a 401 there after a
  * page reload means "access token expired", and a refresh recovers it.
- * The list matches ng-awesome-node-auth's interceptor.
+ * The list is ng-awesome-node-auth's, plus the two pre-session verify routes
+ * that answer a bare 401 for a wrong code (a retry would resubmit the code).
  */
 const NO_RETRY_SUFFIXES = [
   '/login',
@@ -92,6 +93,8 @@ const NO_RETRY_SUFFIXES = [
   '/reset-password',
   '/2fa/verify',
   '/verify-email',
+  '/sms/verify',
+  '/magic-link/verify',
 ] as const;
 
 export function isNoRetryEndpoint(url: string, apiPrefix: string): boolean {

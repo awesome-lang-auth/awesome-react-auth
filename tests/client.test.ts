@@ -58,14 +58,35 @@ describe('session check', () => {
     expect(be.callsTo('GET /auth/me')).toHaveLength(1);
   });
 
-  it('surfaces a network failure as error without inventing a user', async () => {
+  it('a network failure on the first check stays loading (never reads as signed out)', async () => {
+    let online = false;
+    const be = createFakeBackend().on('GET /auth/me', { body: ALICE });
     const client = new AwesomeAuthClient({
-      fetch: (() => Promise.reject(new TypeError('Failed to fetch'))) as typeof fetch,
+      fetch: ((i: RequestInfo, init?: RequestInit) =>
+        online ? be.fetch(i, init) : Promise.reject(new TypeError('Failed to fetch'))) as typeof fetch,
     });
 
     await client.checkSession();
+    expect(client.getSnapshot()).toMatchObject({ user: null, isLoading: true, error: 'Failed to fetch' });
 
-    expect(client.getSnapshot()).toMatchObject({ user: null, isLoading: false, error: 'Failed to fetch' });
+    online = true;
+    await client.checkSession();
+    expect(client.getSnapshot()).toMatchObject({ user: ALICE, isLoading: false, error: null });
+  });
+
+  it('a network failure after sign-in keeps the user', async () => {
+    let online = true;
+    const be = createFakeBackend().on('GET /auth/me', { body: ALICE });
+    const client = new AwesomeAuthClient({
+      fetch: ((i: RequestInfo, init?: RequestInit) =>
+        online ? be.fetch(i, init) : Promise.reject(new TypeError('Failed to fetch'))) as typeof fetch,
+    });
+    await client.checkSession();
+
+    online = false;
+    await client.checkSession();
+
+    expect(client.getSnapshot()).toMatchObject({ user: ALICE, isLoading: false, error: 'Failed to fetch' });
   });
 
   it('keeps the same snapshot and user reference when /me answers the same user', async () => {
@@ -421,5 +442,86 @@ describe('logout and wire details', () => {
 
     expect(be.callsTo('GET /auth/verify-email')[0]?.url).toContain('token=x%26y%3Dz');
     expect(client.oauthUrl('google')).toBe('/auth/oauth/google');
+  });
+});
+
+describe('review fixes', () => {
+  it('a refresh in flight when logout starts cannot bring the session back (bearer)', async () => {
+    const storage = new MemoryTokenStorage();
+    storage.save({ accessToken: 'at_old', refreshToken: 'rt_old' });
+    let releaseRefresh!: () => void;
+    const be = createFakeBackend()
+      .on('GET /auth/me', { body: ALICE })
+      .on('GET /auth/sessions', UNAUTHORIZED)
+      .on('POST /auth/refresh', () =>
+        new Promise((resolve) => {
+          releaseRefresh = () => resolve({ body: { success: true, accessToken: 'at_new', refreshToken: 'rt_new' } });
+        }),
+      )
+      .on('POST /auth/logout', { body: { success: true } });
+    const client = new AwesomeAuthClient({ fetch: be.fetch, mode: 'bearer', storage });
+    await client.checkSession();
+
+    const pending = client.getActiveSessions(); // 401 → refresh, held open
+    await vi.waitFor(() => expect(be.callsTo('POST /auth/refresh')).toHaveLength(1));
+    const loggingOut = client.logout();
+    releaseRefresh();
+    await Promise.all([pending, loggingOut]);
+
+    expect(client.getUser()).toBeNull();
+    expect(storage.load()).toBeNull();
+    // Logout waited for the refresh, so it revoked the newest refresh token.
+    expect(be.callsTo('POST /auth/logout')[0]?.body).toEqual({ refreshToken: 'rt_new' });
+  });
+
+  it('bearer logout hands the refresh token to the backend', async () => {
+    const storage = new MemoryTokenStorage();
+    storage.save({ accessToken: 'at_1', refreshToken: 'rt_1' });
+    const be = createFakeBackend().on('POST /auth/logout', { body: { success: true } });
+    const client = new AwesomeAuthClient({ fetch: be.fetch, mode: 'bearer', storage });
+
+    await client.logout();
+
+    const call = be.callsTo('POST /auth/logout')[0]!;
+    expect(call.body).toEqual({ refreshToken: 'rt_1' });
+    expect(call.headers.get('Authorization')).toBe('Bearer at_1');
+  });
+
+  it('does not refresh on a coded input error (CSRF_INVALID)', async () => {
+    const be = createFakeBackend()
+      .on('GET /auth/me', { body: ALICE })
+      .on('POST /auth/change-email/request', { status: 403, body: { error: 'CSRF token validation failed', code: 'CSRF_INVALID' } });
+    const client = new AwesomeAuthClient({ fetch: be.fetch });
+    await client.checkSession();
+
+    const result = await client.requestEmailChange('new@example.com');
+
+    expect(result).toEqual({ success: false, error: 'CSRF token validation failed', code: 'CSRF_INVALID' });
+    expect(be.callsTo('POST /auth/refresh')).toHaveLength(0);
+    expect(client.getUser()).toEqual(ALICE);
+  });
+
+  it('still refreshes on INVALID_TOKEN and on the bare 403 of an expired access token', async () => {
+    const be = createFakeBackend()
+      .on('GET /auth/linked-accounts',
+        { status: 401, body: { error: 'Invalid or expired access token', code: 'INVALID_TOKEN' } },
+        { body: { linkedAccounts: [] } },
+        { status: 403, body: { error: 'Invalid or expired access token' } },
+        { body: { linkedAccounts: [] } })
+      .on('POST /auth/refresh', { body: { success: true } });
+    const client = new AwesomeAuthClient({ fetch: be.fetch });
+
+    expect((await client.getLinkedAccounts()).success).toBe(true);
+    expect((await client.getLinkedAccounts()).success).toBe(true);
+    expect(be.callsTo('POST /auth/refresh')).toHaveLength(2);
+  });
+
+  it('a wrong SMS code is not resubmitted', async () => {
+    const be = createFakeBackend().on('POST /auth/sms/verify', { status: 401, body: { error: 'Invalid or expired SMS code' } });
+    const client = new AwesomeAuthClient({ fetch: be.fetch });
+
+    expect(await client.validateSms('tmp_1', '0000')).toEqual({ success: false, error: 'Invalid or expired SMS code' });
+    expect(be.callsTo('POST /auth/sms/verify')).toHaveLength(1);
+    expect(be.callsTo('POST /auth/refresh')).toHaveLength(0);
   });
 });
