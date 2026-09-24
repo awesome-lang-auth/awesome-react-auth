@@ -20,15 +20,19 @@ npm install @awesome-lang-auth/react
 import { useState } from 'react';
 import { AwesomeAuthProvider, ProtectedRoute, AnonymousOnly, useAwesomeAuth } from '@awesome-lang-auth/react';
 
+// One provider at the root; each page picks its gate.
 export function App() {
   return (
     <AwesomeAuthProvider options={{ apiPrefix: '/auth' }}>
-      <AnonymousOnly fallback={null}>
-        <LoginForm />
-      </AnonymousOnly>
-      <ProtectedRoute fallback={<Spinner />} redirectTo="/login">
-        <Dashboard />
-      </ProtectedRoute>
+      {location.pathname === '/login' ? (
+        <AnonymousOnly redirectTo="/">
+          <LoginForm />
+        </AnonymousOnly>
+      ) : (
+        <ProtectedRoute fallback={<Spinner />} redirectTo="/login">
+          <Dashboard />
+        </ProtectedRoute>
+      )}
     </AwesomeAuthProvider>
   );
 }
@@ -73,7 +77,7 @@ auth.onAuthStateChanged((user) => console.log('user is now', user));
 <AwesomeAuthProvider client={auth}>...</AwesomeAuthProvider>
 ```
 
-Every method resolves to `{ success, error?, code? }` (plus its payload) and **never rejects on an HTTP error**, like the served `auth.js` and ng-awesome-node-auth.
+Every action method resolves to `{ success, error?, code? }` (plus its payload) and **never rejects on an HTTP error**, like the served `auth.js` and ng-awesome-node-auth. Three are different: `checkSession()` resolves to the user or `null`, `fetch()` to a `Response`, and `oauthUrl()` returns a string.
 
 | Area | Methods |
 | --- | --- |
@@ -91,7 +95,7 @@ Every method resolves to `{ success, error?, code? }` (plus its payload) and **n
 
 **Argument order.** `resetPassword(token, password)` follows the served `auth.js`. ng-awesome-node-auth has the order reversed.
 
-**The user** is the `GET /me` payload. Its id is `sub`, not `id`. It also has `email`, `role`, `loginProvider`, `isEmailVerified` and `isTotpEnabled`, plus `metadata`, `roles` and `permissions` when the backend has those stores. Type your own claims with `useAuthUser<MyUser>()`.
+**The user** is the `GET /me` payload. Its id is `sub`, not `id`. It also has `email`, `role`, `loginProvider`, `isEmailVerified` and `isTotpEnabled`, plus `metadata`, `roles` and `permissions` when the backend has those stores. Type your own claims with `interface MyUser extends AuthUser { tenantId: string }` and `useAuthUser<MyUser>()`. The type parameter is an assertion: nothing checks it against what the backend sends.
 
 ## Transport: cookie or bearer
 
@@ -124,6 +128,15 @@ const storage: TokenStorage = {
 
 On React Native, `apiPrefix` must be an absolute URL.
 
+### Known limits of the backends
+
+- **Bearer mode in a browser, backend on another origin.** `X-Auth-Strategy` is not in the CORS allow-list of awesome-node-auth or awesome-lambda-auth, so the preflight fails. Allow the header on the backend, or use cookie mode. React Native has no CORS and is unaffected.
+- **Cookie mode, backend on another site.** The CSRF cookie belongs to the backend host, so the page cannot read it and send it back. Serve both from one parent domain, or disable CSRF. A `CSRF_INVALID` answer is returned as-is, without a refresh.
+- **Bearer logout on awesome-node-auth.** The client sends the refresh token in the logout body, and awesome-go-auth revokes it. awesome-node-auth only revokes a session found through the access-token cookie, so a bearer refresh token stays valid on the server until it expires.
+- **`requestLinkingEmail` in bearer mode on awesome-node-auth with CSRF on.** That route checks CSRF even for bearer requests, and awesome-go-auth does not.
+
+**Refresh policy.** A 401/403 from the backend triggers one shared refresh and one retry. There are three exceptions. `SESSION_REVOKED` signs the user out. Any other error `code` (such as `CSRF_INVALID` or `INVALID_TEMP_TOKEN`) is returned as-is. The auth answers themselves (`/login`, `/refresh`, `/2fa/verify`, `/sms/verify`, `/magic-link/verify`, ...) are never retried, so a wrong code is not submitted twice. A network failure never signs anyone out: before the first successful check the state stays `isLoading`, with `error` set. Call `checkSession()` to retry.
+
 ## Gates
 
 ```tsx
@@ -144,7 +157,7 @@ On React Native, `apiPrefix` must be an absolute URL.
 
 **React Router.** Pass `onUnauthenticated={() => navigate('/login', { replace: true })}`, using `navigate` from `useNavigate()`. You can also branch on `useAwesomeAuth().isAuthenticated` and render `<Navigate>` yourself.
 
-**Next.js App Router.** The package entry is marked `'use client'`, so you can render `<AwesomeAuthProvider>` from your root layout. For server-side gating, check the session cookie in middleware. This package covers the client side.
+**Next.js App Router.** The package entry is marked `'use client'`, so you can render `<AwesomeAuthProvider>` from your root layout. Server Components can import `hasRole`, `SERVER_SNAPSHOT` and the types from `@awesome-lang-auth/react/server`, which has no client boundary. For server-side gating, check the session cookie in middleware. This package covers the client side.
 
 ## SSR
 

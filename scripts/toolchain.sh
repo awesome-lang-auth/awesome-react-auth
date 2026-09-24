@@ -12,7 +12,8 @@
 set -euo pipefail
 
 NODE_IMAGE="${NODE_IMAGE:-node:22-bookworm}"
-MODULES_VOL="${MODULES_VOL:-awesome-react-auth-node-modules}"
+# Native binaries (esbuild, rollup) are per image: key the modules volume on it.
+MODULES_VOL="${MODULES_VOL:-awesome-react-auth-nm-${NODE_IMAGE//[^a-zA-Z0-9.]/-}}"
 CACHE_VOL="${CACHE_VOL:-awesome-react-auth-npm-cache}"
 
 # Resolve the repo root from this script's location. Quoting matters: the parent
