@@ -1,5 +1,7 @@
 # @awesome-lang-auth/react
 
+[![npm](https://img.shields.io/npm/v/@awesome-lang-auth/react)](https://www.npmjs.com/package/@awesome-lang-auth/react) [![CI](https://github.com/awesome-lang-auth/awesome-react-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/awesome-lang-auth/awesome-react-auth/actions/workflows/ci.yml) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/awesome-lang-auth/awesome-react-auth/badge)](https://scorecard.dev/viewer/?uri=github.com/awesome-lang-auth/awesome-react-auth)
+
 React bindings for the **awesome-\*-auth** family: one provider, one hook, two gates, and a small typed client that speaks the awesome-node-auth wire protocol directly.
 
 It works with any backend of the family, because they all serve the same protocol: awesome-node-auth, awesome-go-auth, awesome-lambda-auth, and the python, rust and dart ports. It depends on none of them, only on `react`.
