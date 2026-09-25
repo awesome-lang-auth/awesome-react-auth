@@ -36,6 +36,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./server": {
+      "import": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.js"
+      },
+      "require": {
+        "types": "./dist/server.d.cts",
+        "default": "./dist/server.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -45,7 +55,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -75,7 +85,7 @@
     "vitest": "^3.2.4"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "publishConfig": {
     "access": "public"
