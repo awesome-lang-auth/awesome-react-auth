@@ -179,6 +179,10 @@ Node is not required on the host. `scripts/toolchain.sh` runs `node:22` in Docke
 ./scripts/toolchain.sh npm run lint:package
 ```
 
+## Release
+
+Releases are published to npm by `.github/workflows/publish.yml` through npm trusted publishing (OIDC, with provenance), so no npm token is stored anywhere. To release, bump `version` in `package.json` and move the `[Unreleased]` notes in `CHANGELOG.md` under it, merge, then publish a GitHub release tagged `v<version>`.
+
 ## License
 
 MIT

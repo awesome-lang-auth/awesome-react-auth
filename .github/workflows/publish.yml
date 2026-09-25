@@ -1,0 +1,41 @@
+name: Publish
+
+# Publishes to npm with trusted publishing (OIDC): no NPM_TOKEN secret exists.
+# npm verifies that this exact workflow file in this repository asked for the
+# token, and attaches a provenance attestation to the release automatically.
+#
+# Trigger: publish a GitHub release whose tag is v<package.json version>.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC token for npm trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Trusted publishing needs npm >= 11.5.1, which ships with Node 24.
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Tag matches package version
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "release tag $GITHUB_REF_NAME does not match package.json $version" >&2
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run lint:package
+      - run: npm publish --access public
